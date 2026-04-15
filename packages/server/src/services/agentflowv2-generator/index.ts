@@ -5,7 +5,7 @@ import { getRunningExpressApp } from '../../utils/getRunningExpressApp'
 import path from 'path'
 import * as fs from 'fs'
 import { generateAgentflowv2 as generateAgentflowv2_json } from 'flowise-components'
-import { z } from 'zod'
+import { z } from 'zod/v3'
 import { sysPrompt } from './prompt'
 import { databaseEntities } from '../../utils'
 import logger from '../../utils/logger'
@@ -116,8 +116,9 @@ const getAllAgentflowv2Marketplaces = async () => {
                 }
             })
 
+            const title = file.split('.json')[0]
             const template = {
-                title: file.split('.json')[0],
+                title,
                 description: fileDataObj.description || `Template from ${file}`,
                 usecases: fileDataObj.usecases || [],
                 nodes: filteredNodes,
@@ -126,7 +127,11 @@ const getAllAgentflowv2Marketplaces = async () => {
 
             // Validate template against schema
             const validatedTemplate = AgentFlowV2Type.parse(template)
-            templates.push(validatedTemplate)
+            templates.push({
+                ...validatedTemplate,
+                // @ts-ignore
+                title: title
+            })
         } catch (error) {
             console.error(`Error processing template file ${file}:`, error)
             // Continue with next file instead of failing completely

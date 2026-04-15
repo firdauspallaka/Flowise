@@ -2,7 +2,7 @@ import { cloneDeep, omit } from 'lodash'
 import { StatusCodes } from 'http-status-codes'
 import { getRunningExpressApp } from '../../utils/getRunningExpressApp'
 import { INodeData, MODE } from '../../Interface'
-import { INodeOptionsValue } from 'flowise-components'
+import { INode, INodeOptionsValue, INodeParams, ClientType } from 'flowise-components'
 import { databaseEntities } from '../../utils'
 import logger from '../../utils/logger'
 import { InternalFlowiseError } from '../../errors/internalFlowiseError'
@@ -11,13 +11,13 @@ import { OMIT_QUEUE_JOB_DATA } from '../../utils/constants'
 import { executeCustomNodeFunction } from '../../utils/executeCustomNodeFunction'
 
 // Get all component nodes
-const getAllNodes = async () => {
+const getAllNodes = async (client?: ClientType) => {
     try {
         const appServer = getRunningExpressApp()
         const dbResponse = []
         for (const nodeName in appServer.nodesPool.componentNodes) {
             const clonedNode = cloneDeep(appServer.nodesPool.componentNodes[nodeName])
-            dbResponse.push(clonedNode)
+            dbResponse.push(filterNodeByClient(clonedNode, client))
         }
         return dbResponse
     } catch (error) {
@@ -26,7 +26,7 @@ const getAllNodes = async () => {
 }
 
 // Get all component nodes for a specific category
-const getAllNodesForCategory = async (category: string) => {
+const getAllNodesForCategory = async (category: string, client?: ClientType) => {
     try {
         const appServer = getRunningExpressApp()
         const dbResponse = []
@@ -34,7 +34,7 @@ const getAllNodesForCategory = async (category: string) => {
             const componentNode = appServer.nodesPool.componentNodes[nodeName]
             if (componentNode.category === category) {
                 const clonedNode = cloneDeep(componentNode)
-                dbResponse.push(clonedNode)
+                dbResponse.push(filterNodeByClient(clonedNode, client))
             }
         }
         return dbResponse
@@ -47,12 +47,12 @@ const getAllNodesForCategory = async (category: string) => {
 }
 
 // Get specific component node via name
-const getNodeByName = async (nodeName: string) => {
+const getNodeByName = async (nodeName: string, client?: ClientType) => {
     try {
         const appServer = getRunningExpressApp()
         if (Object.prototype.hasOwnProperty.call(appServer.nodesPool.componentNodes, nodeName)) {
-            const dbResponse = appServer.nodesPool.componentNodes[nodeName]
-            return dbResponse
+            const clonedNode = cloneDeep(appServer.nodesPool.componentNodes[nodeName])
+            return filterNodeByClient(clonedNode, client)
         } else {
             throw new InternalFlowiseError(StatusCodes.NOT_FOUND, `Node ${nodeName} not found`)
         }
@@ -102,7 +102,9 @@ const getSingleNodeAsyncOptions = async (nodeName: string, requestBody: any): Pr
                     databaseEntities: databaseEntities,
                     componentNodes: appServer.nodesPool.componentNodes,
                     previousNodes: requestBody.previousNodes,
-                    currentNode: requestBody.currentNode
+                    currentNode: requestBody.currentNode,
+                    searchOptions: requestBody.searchOptions,
+                    cachePool: appServer.cachePool
                 })
 
                 return dbResponse
@@ -121,20 +123,22 @@ const getSingleNodeAsyncOptions = async (nodeName: string, requestBody: any): Pr
 }
 
 // execute custom function node
-const executeCustomFunction = async (requestBody: any) => {
+const executeCustomFunction = async (requestBody: any, workspaceId?: string, orgId?: string) => {
     const appServer = getRunningExpressApp()
     const executeData = {
         appDataSource: appServer.AppDataSource,
         componentNodes: appServer.nodesPool.componentNodes,
         data: requestBody,
-        isExecuteCustomFunction: true
+        isExecuteCustomFunction: true,
+        orgId,
+        workspaceId
     }
 
     if (process.env.MODE === MODE.QUEUE) {
         const predictionQueue = appServer.queueManager.getQueue('prediction')
 
         const job = await predictionQueue.addJob(omit(executeData, OMIT_QUEUE_JOB_DATA))
-        logger.debug(`[server]: Execute Custom Function Job added to queue: ${job.id}`)
+        logger.debug(`[server]: Execute Custom Function Job added to queue by ${orgId}: ${job.id}`)
 
         const queueEvents = predictionQueue.getQueueEvents()
         const result = await job.waitUntilFinished(queueEvents)
@@ -146,6 +150,29 @@ const executeCustomFunction = async (requestBody: any) => {
     } else {
         return await executeCustomNodeFunction(executeData)
     }
+}
+
+// Filter node inputs by client. Params/options with a `client` array that excludes the requesting client are removed. No-ops when client is omitted.
+export const filterNodeByClient = (node: INode, client?: ClientType): INode => {
+    if (!client || !node.inputs) return node
+
+    const filterParam = (param: INodeParams): INodeParams => {
+        const filtered: INodeParams = { ...param }
+        if (filtered.options) {
+            filtered.options = filtered.options.filter((opt: INodeOptionsValue) => !opt.client || opt.client.includes(client))
+        }
+        if (filtered.tabs) {
+            filtered.tabs = filtered.tabs.filter((t) => !t.client || t.client.includes(client)).map(filterParam)
+        }
+        if (filtered.array) {
+            filtered.array = filtered.array.filter((a) => !a.client || a.client.includes(client)).map(filterParam)
+        }
+        return filtered
+    }
+
+    const filteredInputs = (node.inputs as INodeParams[]).filter((param) => !param.client || param.client.includes(client)).map(filterParam)
+
+    return { ...node, inputs: filteredInputs }
 }
 
 export default {

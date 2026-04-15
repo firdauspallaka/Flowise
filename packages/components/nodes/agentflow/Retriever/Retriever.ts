@@ -8,6 +8,7 @@ import {
     IServerSideEventStreamer
 } from '../../../src/Interface'
 import { updateFlowState } from '../utils'
+import { processTemplateVariables } from '../../../src/utils'
 import { DataSource } from 'typeorm'
 import { BaseRetriever } from '@langchain/core/retrievers'
 import { Document } from '@langchain/core/documents'
@@ -35,7 +36,7 @@ class Retriever_Agentflow implements INode {
     constructor() {
         this.label = 'Retriever'
         this.name = 'retrieverAgentflow'
-        this.version = 1.0
+        this.version = 1.1
         this.type = 'Retriever'
         this.category = 'Agent Flows'
         this.description = 'Retrieve information from vector database'
@@ -86,8 +87,7 @@ class Retriever_Agentflow implements INode {
                         label: 'Key',
                         name: 'key',
                         type: 'asyncOptions',
-                        loadMethod: 'listRuntimeStateKeys',
-                        freeSolo: true
+                        loadMethod: 'listRuntimeStateKeys'
                     },
                     {
                         label: 'Value',
@@ -119,7 +119,8 @@ class Retriever_Agentflow implements INode {
                 return returnData
             }
 
-            const stores = await appDataSource.getRepository(databaseEntities['DocumentStore']).find()
+            const searchOptions = options.searchOptions || {}
+            const stores = await appDataSource.getRepository(databaseEntities['DocumentStore']).findBy(searchOptions)
             for (const store of stores) {
                 if (store.status === 'UPSERTED') {
                     const obj = {
@@ -196,14 +197,7 @@ class Retriever_Agentflow implements INode {
                 sseStreamer.streamTokenEvent(chatId, finalOutput)
             }
 
-            // Process template variables in state
-            if (newState && Object.keys(newState).length > 0) {
-                for (const key in newState) {
-                    if (newState[key].toString().includes('{{ output }}')) {
-                        newState[key] = finalOutput
-                    }
-                }
-            }
+            newState = processTemplateVariables(newState, finalOutput)
 
             const returnOutput = {
                 id: nodeData.id,

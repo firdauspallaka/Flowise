@@ -4,35 +4,34 @@ import 'react-datepicker/dist/react-datepicker.css'
 
 // material-ui
 import {
-    Pagination,
     Box,
-    Stack,
-    TextField,
-    MenuItem,
     Button,
-    Grid,
-    FormControl,
-    InputLabel,
-    Select,
     Dialog,
     DialogActions,
     DialogContent,
     DialogContentText,
     DialogTitle,
+    FormControl,
+    Grid,
     IconButton,
+    InputLabel,
+    MenuItem,
+    Select,
+    Stack,
+    TextField,
     Tooltip,
-    Typography,
     useTheme
 } from '@mui/material'
 
 // project imports
-import MainCard from '@/ui-component/cards/MainCard'
 import ErrorBoundary from '@/ErrorBoundary'
 import ViewHeader from '@/layout/MainLayout/ViewHeader'
+import MainCard from '@/ui-component/cards/MainCard'
+import { Available } from '@/ui-component/rbac/available'
 
 // API
-import useApi from '@/hooks/useApi'
 import executionsApi from '@/api/executions'
+import useApi from '@/hooks/useApi'
 import { useSelector } from 'react-redux'
 
 // icons
@@ -40,9 +39,10 @@ import execution_empty from '@/assets/images/executions_empty.svg'
 import { IconTrash } from '@tabler/icons-react'
 
 // const
+import TablePagination, { DEFAULT_ITEMS_PER_PAGE } from '@/ui-component/pagination/TablePagination'
 import { ExecutionsListTable } from '@/ui-component/table/ExecutionsListTable'
-import { ExecutionDetails } from './ExecutionDetails'
 import { omit } from 'lodash'
+import { ExecutionDetails } from './ExecutionDetails'
 
 // ==============================|| AGENT EXECUTIONS ||============================== //
 
@@ -68,12 +68,8 @@ const AgentExecutions = () => {
         startDate: null,
         endDate: null,
         agentflowId: '',
+        agentflowName: '',
         sessionId: ''
-    })
-    const [pagination, setPagination] = useState({
-        page: 1,
-        limit: 10,
-        total: 0
     })
 
     const handleFilterChange = (field, value) => {
@@ -93,26 +89,26 @@ const AgentExecutions = () => {
         })
     }
 
-    const handlePageChange = (event, newPage) => {
-        setPagination({
-            ...pagination,
-            page: newPage
-        })
+    /* Table Pagination */
+    const [currentPage, setCurrentPage] = useState(1)
+    const [pageLimit, setPageLimit] = useState(() => Number(localStorage.getItem('executionsPageSize') || DEFAULT_ITEMS_PER_PAGE))
+    const [total, setTotal] = useState(0)
+    const onChange = (page, pageLimit) => {
+        setCurrentPage(page)
+        setPageLimit(pageLimit)
+        localStorage.setItem('executionsPageSize', pageLimit)
+        applyFilters(page, pageLimit)
     }
 
-    const handleLimitChange = (event) => {
-        setPagination({
-            ...pagination,
-            page: 1, // Reset to first page when changing items per page
-            limit: parseInt(event.target.value, 10)
-        })
-    }
-
-    const applyFilters = () => {
+    const applyFilters = (page, limit) => {
         setLoading(true)
+        // Ensure page and limit are numbers, not objects
+        const pageNum = typeof page === 'number' ? page : currentPage
+        const limitNum = typeof limit === 'number' ? limit : pageLimit
+
         const params = {
-            page: pagination.page,
-            limit: pagination.limit
+            page: pageNum,
+            limit: limitNum
         }
 
         if (filters.state) params.state = filters.state
@@ -138,6 +134,7 @@ const AgentExecutions = () => {
         }
 
         if (filters.agentflowId) params.agentflowId = filters.agentflowId
+        if (filters.agentflowName) params.agentflowName = filters.agentflowName
         if (filters.sessionId) params.sessionId = filters.sessionId
 
         getAllExecutions.request(params)
@@ -149,9 +146,11 @@ const AgentExecutions = () => {
             startDate: null,
             endDate: null,
             agentflowId: '',
+            agentflowName: '',
             sessionId: ''
         })
-        getAllExecutions.request()
+        setCurrentPage(1)
+        getAllExecutions.request({ page: 1, limit: pageLimit })
     }
 
     const handleExecutionSelectionChange = (selectedIds) => {
@@ -174,7 +173,7 @@ const AgentExecutions = () => {
     }
 
     useEffect(() => {
-        getAllExecutions.request()
+        getAllExecutions.request({ page: 1, limit: DEFAULT_ITEMS_PER_PAGE })
 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
@@ -185,7 +184,7 @@ const AgentExecutions = () => {
                 const { data, total } = getAllExecutions.data
                 if (!Array.isArray(data)) return
                 setExecutions(data)
-                setPagination((prev) => ({ ...prev, total }))
+                setTotal(total)
             } catch (e) {
                 console.error(e)
             }
@@ -201,16 +200,11 @@ const AgentExecutions = () => {
     }, [getAllExecutions.error])
 
     useEffect(() => {
-        applyFilters()
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [pagination.page, pagination.limit])
-
-    useEffect(() => {
         if (deleteExecutionsApi.data) {
             // Refresh the executions list
             getAllExecutions.request({
-                page: pagination.page,
-                limit: pagination.limit
+                page: currentPage,
+                limit: pageLimit
             })
             setSelectedExecutionIds([])
         }
@@ -224,8 +218,16 @@ const AgentExecutions = () => {
             const executionDetails =
                 typeof execution.executionData === 'string' ? JSON.parse(execution.executionData) : execution.executionData
             setSelectedExecutionData(executionDetails)
-            setSelectedMetadata(omit(execution, ['executionData']))
+            const newMetadata = {
+                ...omit(execution, ['executionData']),
+                agentflow: {
+                    ...selectedMetadata.agentflow
+                }
+            }
+            setSelectedMetadata(newMetadata)
         }
+
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [getExecutionByIdApi.data])
 
     return (
@@ -317,6 +319,20 @@ const AgentExecutions = () => {
                             <Grid sx={{ ml: -1 }} item xs={12} md={2}>
                                 <TextField
                                     fullWidth
+                                    label='Agentflow'
+                                    value={filters.agentflowName}
+                                    onChange={(e) => handleFilterChange('agentflowName', e.target.value)}
+                                    size='small'
+                                    sx={{
+                                        '& .MuiOutlinedInput-notchedOutline': {
+                                            borderColor: borderColor
+                                        }
+                                    }}
+                                />
+                            </Grid>
+                            <Grid sx={{ ml: -1 }} item xs={12} md={2}>
+                                <TextField
+                                    fullWidth
                                     label='Session ID'
                                     value={filters.sessionId}
                                     onChange={(e) => handleFilterChange('sessionId', e.target.value)}
@@ -328,96 +344,81 @@ const AgentExecutions = () => {
                                     }}
                                 />
                             </Grid>
-                            <Grid item xs={12} md={4}>
+                            <Grid item xs={12} md={2}>
                                 <Stack direction='row' spacing={1}>
-                                    <Button variant='contained' color='primary' onClick={applyFilters} size='small'>
+                                    <Button
+                                        variant='contained'
+                                        color='primary'
+                                        onClick={() => applyFilters(currentPage, pageLimit)}
+                                        size='small'
+                                    >
                                         Apply
                                     </Button>
                                     <Button variant='outlined' onClick={resetFilters} size='small'>
                                         Reset
                                     </Button>
-                                    <Tooltip title='Delete selected executions'>
-                                        <span>
-                                            <IconButton
-                                                sx={{ height: 30, width: 30 }}
-                                                size='small'
-                                                color='error'
-                                                onClick={handleDeleteDialogOpen}
-                                                edge='end'
-                                                disabled={selectedExecutionIds.length === 0}
-                                            >
-                                                <IconTrash />
-                                            </IconButton>
-                                        </span>
-                                    </Tooltip>
+                                    <Available permissions={['executions:delete']}>
+                                        <Tooltip title='Delete selected executions'>
+                                            <span>
+                                                <IconButton
+                                                    sx={{ height: 30, width: 30 }}
+                                                    size='small'
+                                                    color='error'
+                                                    onClick={handleDeleteDialogOpen}
+                                                    edge='end'
+                                                    disabled={selectedExecutionIds.length === 0}
+                                                >
+                                                    <IconTrash />
+                                                </IconButton>
+                                            </span>
+                                        </Tooltip>
+                                    </Available>
                                 </Stack>
                             </Grid>
                         </Grid>
                     </Box>
 
-                    <ExecutionsListTable
-                        data={executions}
-                        isLoading={isLoading}
-                        onSelectionChange={handleExecutionSelectionChange}
-                        onExecutionRowClick={(execution) => {
-                            setOpenDrawer(true)
-                            const executionDetails =
-                                typeof execution.executionData === 'string' ? JSON.parse(execution.executionData) : execution.executionData
-                            setSelectedExecutionData(executionDetails)
-                            setSelectedMetadata(omit(execution, ['executionData']))
-                        }}
-                    />
-
-                    {/* Pagination and Page Size Controls */}
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                            <Typography variant='body2'>Items per page:</Typography>
-                            <FormControl
-                                variant='outlined'
-                                size='small'
-                                sx={{
-                                    minWidth: 80,
-                                    '& .MuiOutlinedInput-notchedOutline': {
-                                        borderColor: borderColor
-                                    },
-                                    '& .MuiSvgIcon-root': {
-                                        color: customization.isDarkMode ? '#fff' : 'inherit'
-                                    }
+                    {executions?.length > 0 && (
+                        <>
+                            <ExecutionsListTable
+                                data={executions}
+                                isLoading={isLoading}
+                                onSelectionChange={handleExecutionSelectionChange}
+                                onExecutionRowClick={(execution) => {
+                                    setOpenDrawer(true)
+                                    const executionDetails =
+                                        typeof execution.executionData === 'string'
+                                            ? JSON.parse(execution.executionData)
+                                            : execution.executionData
+                                    setSelectedExecutionData(executionDetails)
+                                    setSelectedMetadata(omit(execution, ['executionData']))
                                 }}
-                            >
-                                <Select value={pagination.limit} onChange={handleLimitChange} displayEmpty>
-                                    <MenuItem value={10}>10</MenuItem>
-                                    <MenuItem value={50}>50</MenuItem>
-                                    <MenuItem value={100}>100</MenuItem>
-                                    <MenuItem value={1000}>1000</MenuItem>
-                                </Select>
-                            </FormControl>
-                        </Box>
-                        <Pagination
-                            count={Math.ceil(pagination.total / pagination.limit)}
-                            page={pagination.page}
-                            onChange={handlePageChange}
-                            color='primary'
-                        />
-                    </Box>
+                            />
 
-                    <ExecutionDetails
-                        open={openDrawer}
-                        execution={selectedExecutionData}
-                        metadata={selectedMetadata}
-                        onClose={() => setOpenDrawer(false)}
-                        onProceedSuccess={() => {
-                            setOpenDrawer(false)
-                            getAllExecutions.request()
-                        }}
-                        onUpdateSharing={() => {
-                            getAllExecutions.request()
-                        }}
-                        onRefresh={(executionId) => {
-                            getAllExecutions.request()
-                            getExecutionByIdApi.request(executionId)
-                        }}
-                    />
+                            {/* Pagination and Page Size Controls */}
+                            {!isLoading && total > 0 && (
+                                <TablePagination currentPage={currentPage} limit={pageLimit} total={total} onChange={onChange} />
+                            )}
+
+                            <ExecutionDetails
+                                open={openDrawer}
+                                execution={selectedExecutionData}
+                                metadata={selectedMetadata}
+                                onClose={() => setOpenDrawer(false)}
+                                onProceedSuccess={() => {
+                                    setOpenDrawer(false)
+                                    getAllExecutions.request()
+                                }}
+                                onUpdateSharing={() => {
+                                    getAllExecutions.request()
+                                }}
+                                onRefresh={(executionId) => {
+                                    getAllExecutions.request()
+                                    getExecutionByIdApi.request(executionId)
+                                }}
+                            />
+                        </>
+                    )}
 
                     {/* Delete Confirmation Dialog */}
                     <Dialog

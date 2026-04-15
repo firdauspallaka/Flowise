@@ -7,6 +7,7 @@ import { RedisEventPublisher } from './RedisEventPublisher'
 import { AbortControllerPool } from '../AbortControllerPool'
 import { BaseQueue } from './BaseQueue'
 import { RedisOptions } from 'bullmq'
+import { UsageCacheManager } from '../UsageCacheManager'
 import logger from '../utils/logger'
 import { generateAgentflowv2 as generateAgentflowv2_json } from 'flowise-components'
 import { databaseEntities } from '../utils'
@@ -18,6 +19,7 @@ interface PredictionQueueOptions {
     cachePool: CachePool
     componentNodes: IComponentNodes
     abortControllerPool: AbortControllerPool
+    usageCacheManager: UsageCacheManager
 }
 
 interface IGenerateAgentflowv2Params extends IExecuteFlowParams {
@@ -35,6 +37,7 @@ export class PredictionQueue extends BaseQueue {
     private cachePool: CachePool
     private appDataSource: DataSource
     private abortControllerPool: AbortControllerPool
+    private usageCacheManager: UsageCacheManager
     private redisPublisher: RedisEventPublisher
     private queueName: string
 
@@ -46,6 +49,7 @@ export class PredictionQueue extends BaseQueue {
         this.cachePool = options.cachePool
         this.appDataSource = options.appDataSource
         this.abortControllerPool = options.abortControllerPool
+        this.usageCacheManager = options.usageCacheManager
         this.redisPublisher = new RedisEventPublisher()
         this.redisPublisher.connect()
     }
@@ -59,9 +63,13 @@ export class PredictionQueue extends BaseQueue {
     }
 
     async processJob(data: IExecuteFlowParams | IGenerateAgentflowv2Params) {
+        if (this.redisPublisher) {
+            await this.redisPublisher.connect()
+        }
         if (this.appDataSource) data.appDataSource = this.appDataSource
         if (this.telemetry) data.telemetry = this.telemetry
         if (this.cachePool) data.cachePool = this.cachePool
+        if (this.usageCacheManager) data.usageCacheManager = this.usageCacheManager
         if (this.componentNodes) data.componentNodes = this.componentNodes
         if (this.redisPublisher) data.sseStreamer = this.redisPublisher
 
@@ -78,11 +86,13 @@ export class PredictionQueue extends BaseQueue {
 
         if (Object.prototype.hasOwnProperty.call(data, 'isExecuteCustomFunction')) {
             const executeCustomFunctionData = data as any
-            logger.info(`Executing Custom Function...`)
+            logger.info(`[${executeCustomFunctionData.orgId}]: Executing Custom Function...`)
             return await executeCustomNodeFunction({
                 appDataSource: this.appDataSource,
                 componentNodes: this.componentNodes,
-                data: executeCustomFunctionData.data
+                data: executeCustomFunctionData.data,
+                workspaceId: executeCustomFunctionData.workspaceId,
+                orgId: executeCustomFunctionData.orgId
             })
         }
 

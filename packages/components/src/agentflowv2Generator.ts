@@ -1,8 +1,9 @@
 import { ICommonObject } from './Interface'
-import { z } from 'zod'
+import { z } from 'zod/v3'
 import { StructuredOutputParser } from '@langchain/core/output_parsers'
 import { isEqual, get, cloneDeep } from 'lodash'
 import { BaseChatModel } from '@langchain/core/language_models/chat_models'
+import { extractResponseContent } from './utils'
 
 const ToolType = z.array(z.string()).describe('List of tools')
 
@@ -76,10 +77,10 @@ interface AgentToolConfig {
 
 interface NodeInputs {
     agentTools?: AgentToolConfig[]
-    selectedTool?: string
+    toolAgentflowSelectedTool?: string
     toolInputArgs?: Record<string, any>[]
-    selectedToolConfig?: {
-        selectedTool: string
+    toolAgentflowSelectedToolConfig?: {
+        toolAgentflowSelectedTool: string
     }
     [key: string]: any
 }
@@ -284,10 +285,10 @@ Now, select the ONLY tool that is needed to achieve the given task. You must onl
             if (Array.isArray(tools) && tools.length > 0) {
                 selectedTools.push(...tools)
 
-                node.data.inputs.selectedTool = tools[0]
+                node.data.inputs.toolAgentflowSelectedTool = tools[0]
                 node.data.inputs.toolInputArgs = []
-                node.data.inputs.selectedToolConfig = {
-                    selectedTool: tools[0]
+                node.data.inputs.toolAgentflowSelectedToolConfig = {
+                    toolAgentflowSelectedTool: tools[0]
                 }
             }
         }
@@ -308,7 +309,7 @@ const _generateSelectedTools = async (config: Record<string, any>, question: str
         const model = (await newToolNodeInstance.init(config.selectedChatModel, '', options)) as BaseChatModel
 
         // Create a parser to validate the output
-        const parser = StructuredOutputParser.fromZodSchema(ToolType)
+        const parser = StructuredOutputParser.fromZodSchema(ToolType as any)
 
         // Generate JSON schema from our Zod schema
         const formatInstructions = parser.getFormatInstructions()
@@ -329,7 +330,7 @@ const _generateSelectedTools = async (config: Record<string, any>, question: str
         const response = await model.invoke(messages)
 
         // Try to extract JSON from the response
-        const responseContent = response.content.toString()
+        const responseContent = extractResponseContent(response)
         const jsonMatch = responseContent.match(/```json\n([\s\S]*?)\n```/) || responseContent.match(/{[\s\S]*?}/)
 
         if (jsonMatch) {
@@ -364,7 +365,7 @@ const generateNodesEdges = async (config: Record<string, any>, question: string,
         const model = (await newToolNodeInstance.init(config.selectedChatModel, '', options)) as BaseChatModel
 
         // Create a parser to validate the output
-        const parser = StructuredOutputParser.fromZodSchema(NodesEdgesType)
+        const parser = StructuredOutputParser.fromZodSchema(NodesEdgesType as any)
 
         // Generate JSON schema from our Zod schema
         const formatInstructions = parser.getFormatInstructions()
@@ -385,7 +386,7 @@ const generateNodesEdges = async (config: Record<string, any>, question: string,
         const response = await model.invoke(messages)
 
         // Try to extract JSON from the response
-        const responseContent = response.content.toString()
+        const responseContent = extractResponseContent(response)
         const jsonMatch = responseContent.match(/```json\n([\s\S]*?)\n```/) || responseContent.match(/{[\s\S]*?}/)
 
         if (jsonMatch) {
@@ -585,42 +586,87 @@ const _showHideOperation = (nodeData: Record<string, any>, inputParam: Record<st
         if (path.includes('$index') && index) {
             path = path.replace('$index', index.toString())
         }
-        const groundValue = get(nodeData.inputs, path, '')
+        let groundValue = get(nodeData.inputs, path, '')
+        if (groundValue && typeof groundValue === 'string' && groundValue.startsWith('[') && groundValue.endsWith(']')) {
+            groundValue = JSON.parse(groundValue)
+        }
 
-        if (Array.isArray(comparisonValue)) {
-            if (displayType === 'show' && !comparisonValue.includes(groundValue)) {
-                inputParam.display = false
+        // Handle case where groundValue is an array
+        if (Array.isArray(groundValue)) {
+            if (Array.isArray(comparisonValue)) {
+                // Both are arrays - check if there's any intersection
+                const hasIntersection = comparisonValue.some((val) => groundValue.includes(val))
+                if (displayType === 'show' && !hasIntersection) {
+                    inputParam.display = false
+                }
+                if (displayType === 'hide' && hasIntersection) {
+                    inputParam.display = false
+                }
+            } else if (typeof comparisonValue === 'string') {
+                // comparisonValue is string, groundValue is array - check if array contains the string
+                const matchFound = groundValue.some((val) => comparisonValue === val || new RegExp(comparisonValue).test(val))
+                if (displayType === 'show' && !matchFound) {
+                    inputParam.display = false
+                }
+                if (displayType === 'hide' && matchFound) {
+                    inputParam.display = false
+                }
+            } else if (typeof comparisonValue === 'boolean' || typeof comparisonValue === 'number') {
+                // For boolean/number comparison with array, check if array contains the value
+                const matchFound = groundValue.includes(comparisonValue)
+                if (displayType === 'show' && !matchFound) {
+                    inputParam.display = false
+                }
+                if (displayType === 'hide' && matchFound) {
+                    inputParam.display = false
+                }
+            } else if (typeof comparisonValue === 'object') {
+                // For object comparison with array, use deep equality check
+                const matchFound = groundValue.some((val) => isEqual(comparisonValue, val))
+                if (displayType === 'show' && !matchFound) {
+                    inputParam.display = false
+                }
+                if (displayType === 'hide' && matchFound) {
+                    inputParam.display = false
+                }
             }
-            if (displayType === 'hide' && comparisonValue.includes(groundValue)) {
-                inputParam.display = false
-            }
-        } else if (typeof comparisonValue === 'string') {
-            if (displayType === 'show' && !(comparisonValue === groundValue || new RegExp(comparisonValue).test(groundValue))) {
-                inputParam.display = false
-            }
-            if (displayType === 'hide' && (comparisonValue === groundValue || new RegExp(comparisonValue).test(groundValue))) {
-                inputParam.display = false
-            }
-        } else if (typeof comparisonValue === 'boolean') {
-            if (displayType === 'show' && comparisonValue !== groundValue) {
-                inputParam.display = false
-            }
-            if (displayType === 'hide' && comparisonValue === groundValue) {
-                inputParam.display = false
-            }
-        } else if (typeof comparisonValue === 'object') {
-            if (displayType === 'show' && !isEqual(comparisonValue, groundValue)) {
-                inputParam.display = false
-            }
-            if (displayType === 'hide' && isEqual(comparisonValue, groundValue)) {
-                inputParam.display = false
-            }
-        } else if (typeof comparisonValue === 'number') {
-            if (displayType === 'show' && comparisonValue !== groundValue) {
-                inputParam.display = false
-            }
-            if (displayType === 'hide' && comparisonValue === groundValue) {
-                inputParam.display = false
+        } else {
+            // Original logic for non-array groundValue
+            if (Array.isArray(comparisonValue)) {
+                if (displayType === 'show' && !comparisonValue.includes(groundValue)) {
+                    inputParam.display = false
+                }
+                if (displayType === 'hide' && comparisonValue.includes(groundValue)) {
+                    inputParam.display = false
+                }
+            } else if (typeof comparisonValue === 'string') {
+                if (displayType === 'show' && !(comparisonValue === groundValue || new RegExp(comparisonValue).test(groundValue))) {
+                    inputParam.display = false
+                }
+                if (displayType === 'hide' && (comparisonValue === groundValue || new RegExp(comparisonValue).test(groundValue))) {
+                    inputParam.display = false
+                }
+            } else if (typeof comparisonValue === 'boolean') {
+                if (displayType === 'show' && comparisonValue !== groundValue) {
+                    inputParam.display = false
+                }
+                if (displayType === 'hide' && comparisonValue === groundValue) {
+                    inputParam.display = false
+                }
+            } else if (typeof comparisonValue === 'object') {
+                if (displayType === 'show' && !isEqual(comparisonValue, groundValue)) {
+                    inputParam.display = false
+                }
+                if (displayType === 'hide' && isEqual(comparisonValue, groundValue)) {
+                    inputParam.display = false
+                }
+            } else if (typeof comparisonValue === 'number') {
+                if (displayType === 'show' && comparisonValue !== groundValue) {
+                    inputParam.display = false
+                }
+                if (displayType === 'hide' && comparisonValue === groundValue) {
+                    inputParam.display = false
+                }
             }
         }
     })
